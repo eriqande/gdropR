@@ -1,0 +1,235 @@
+---
+title: "Quick start quide to gdropR"
+output: 
+  rmarkdown::html_vignette:
+    toc: true
+vignette: >
+  %\VignetteIndexEntry{Quick start quide to gdropR}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup}
+library(tidyverse)
+library(gdropR)
+```
+
+The gdropR package provides a very simple, lightweight wrapper
+that sets up input files to the
+software program [Mendel](https://pubmed.ncbi.nlm.nih.gov/23610370/)
+to allow simulation of linked markers on a user-defined pedigree.
+
+Unfortunately, Mendel does not seem to be distributed
+any longer.  So, if you need it, ask Eric.
+
+The purpose of this vignette is to show how to use the functions in
+gdropR to:
+
+1. Define (simulated) allele frequencies for 1000 SNP markers.
+1. Place those SNP markers randomly within the 34 named chromosomes
+of the Chinook salmon genome, and prepare that marker information for simulating linked markers on a pedigree.
+3. Prepare a pedigree (Kid, Pa, Ma columns) for use in this package.
+4. Simulate a data set of linked markers on a pedigree.
+5. Simulate genotyping error at those markers.
+
+This example leans toward a current use case, so I won't discuss much, more
+generally.
+
+# Simulate some marker allele frequencies
+
+We want 1000 SNPs chosen to have fairly intermediate allele frequencies. We will
+simulate their freqs from a beta(10, 10) distribution.  We need to put these in the
+tibble format described in `sprinkle_markers_into_genome()`. 
+```{r}
+set.seed(5)
+L <- 1000
+m1 <- tibble(
+  Chrom = "Unk",
+  Locus = paste0("Unk-", 1:L),
+  Pos = NA_real_,
+  LocIdx = 1:L,
+  a1 = rbeta(L, 10, 10),
+  a2 = 1 - a1
+) %>%
+  pivot_longer(
+    cols = c(a1, a2),
+    names_to = "Allele",
+    values_to = "Freq"
+  ) %>%
+  group_by(Locus) %>%
+  mutate(AlleIdx = 1:n()) %>%
+  ungroup() %>%
+  select(Chrom, Locus, Pos, Allele, LocIdx, AlleIdx, Freq)
+
+markers <- reindex_markers(m1)
+```
+
+# Place those markers randomly in physical positions in a genome
+
+One of the data objects in the package is `chinook_chromosomes`.  We
+load that up and then get it into the required format for using
+`sprinkle_markers_into_genome()`. We need special columns and we 
+also need to report the length of each chromosomes as a fraction of the
+longest chromosome.
+```{r}
+genome <- chinook_chromosomes %>%
+  mutate(
+    idx = 1:n(),
+    chrom = name1,
+    num_bases = length,
+    scaled_length = num_bases / max(num_bases)
+  ) %>%
+  select(idx, chrom, scaled_length, num_bases)
+```
+Once we have that we can sprinkle our markers randomly into the genome. And
+after we are done with that we rename the markers in the Locus column to
+correspond to their positions on the chromosomes.
+```{r}
+mapped_markers <- sprinkle_markers_into_genome(
+  markers,
+  genome
+) %>%
+  group_by(Chrom) %>%
+  mutate(Locus = paste0(Chrom, "-", rep(1:(n()/2), each = 2))) %>%
+  ungroup()
+```
+
+# Prepare the pedigree
+
+As part of the package data I have a pedigree that has 5 generations of
+individuals born into a population.  Each of those 5 generations, 60 males
+and 60 females were born.  I simulated this pedigree to by largely acyclic.
+
+To use it here, we need to add a column giving the sex of the individuals, and
+we must explicitly add rows for the births of the founders with
+the parents set to "0".  Note that we know the sex of anyone who appears
+in the Ma or Pa columns.  But for the final generation, we don't know that.
+We set the `fem_prob` parameter to make all those final generation individuals
+females.  (We will be pretending that we can only sample females from
+this population.)
+```{r}
+pedigree <- ped5gen_acyclic %>%
+  add_explicit_founder_parents() %>%
+  add_pedigree_sex_column(fem_prob = 1.0)
+```
+
+# Simulate those markers on our pedigree 
+
+We do this to get a wide data frame back:
+```{r}
+wide_genos <- simulate_linked_genotypes(
+  mapped_markers,
+  pedigree
+)
+```
+
+Look at the first 5 rows and 5 columns of `wide_genos`:
+```{r}
+wide_genos[1:5, 1:5]
+```
+
+# Simulate genotyping error at those loci
+
+I only have a single genotyping error function, and it only deals with
+biallelic markers that have genotypes of `1/1`, `1/2`, `2/1` or `2/2`.
+Heterozygotes are miscalled as homozygotes with rate `het_miscall`, or,
+one allele in the homozygote genotype gets changed to the other at a rate of
+`hom_miscall`.  We never mistake one homozygote for the other.
+
+We need to get the genotypes in long format for this function to work, so:
+```{r}
+long_genos <- wide_genos %>%
+  pivot_longer(
+    cols = c(-indiv, -sex),
+    names_to = "Locus",
+    values_to = "Genotype"
+  )
+```
+
+Now, that they are in long format we use the function
+`biallelic_geno_error()`, like this:
+```{r}
+err_genos <- long_genos %>%
+  mutate(
+    obs_geno = biallelic_geno_error(
+      genos = Genotype, 
+      het_miscall = 0.02, 
+      hom_miscall = 0.005
+    )
+  )
+```
+
+Let's count up all those genotypes to makes sure our genotype error is correct:
+```{r}
+err_genos %>%
+  count(Genotype, obs_geno) %>%
+  group_by(Genotype) %>%
+  mutate(fract = n / sum(n))
+```
+
+Yep, that looks correct.  
+
+# Turning these into pedFac input
+
+From this point, I suspect it would be pretty easy to turn this into
+pedFac output format.  The one thing we would like to add would be the
+generation level of each individual in the pedigree. We have that for
+most of the individuals, but not the additional founders we had to put in there.
+
+Look at the pedigree:
+```{r}
+head(ped5gen_acyclic)
+```
+The "generation" column there effectively gives the generation at which
+each of the Kids was born.  
+
+The additional founders have an ID > 1000, and, the way I labeled them, we just
+have to subtract 2 from the first digit in the ID to get the "year" in which 
+they were born. 
+
+So, our generation levels for everyone can be obtained from our processed
+`pedigree`:
+```{r}
+ped_with_gens <- pedigree %>%
+  mutate(
+    generation = case_when(
+      !is.na(generation) ~ as.integer(generation),
+      (Pa == "0" | Ma == "0") & as.integer(Kid) < 1000 ~ 0L,
+      as.integer(Kid) > 1000 ~ as.integer(str_sub(Kid, 1, 1)) - 2L,
+      TRUE ~ NA_integer_
+    )
+  )
+```
+
+So, those are the generation levels of the individuals.  To get the
+genotypes in 0/1/2 wide format, it would be something like this:
+```{r}
+genos012 <- err_genos %>%
+  mutate(obs012 = case_when(
+    obs_geno == "1/1" ~ 0L,
+    obs_geno %in% c("1/2", "2/1") ~ 1L,
+    obs_geno == "2/2" ~ 2L,
+    TRUE ~ NA_integer_
+  )) %>%
+  select(-Genotype, -obs_geno) %>%
+  pivot_wider(
+    names_from = Locus,
+    values_from = obs012
+  )
+
+
+# look at them
+genos012[1:8, 1:7]
+```
+
+From that, you can easily select the individuals that are to be
+observed.
+
+
