@@ -135,6 +135,8 @@ Look at the first 5 rows and 5 columns of `wide_genos`:
 wide_genos[1:5, 1:5]
 ```
 
+
+
 # Simulate genotyping error at those loci
 
 I only have a single genotyping error function, and it only deals with
@@ -188,11 +190,10 @@ Look at the pedigree:
 head(FourGen_555_pedigree)
 ```
 The "generation" column there effectively gives the generation at which
-each of the Kids was born.  
-
-The additional founders have an ID > 1000, and, the way I labeled them, we just
-have to subtract 2 from the first digit in the ID to get the "year" in which 
-they were born. 
+each of the Kids was born, with the original generation being called
+0.  Additionally, the ID of the individuals has the year the individual
+was born (with the initial generation counted as 1).  For example,
+`F_1_36_f` was born in year 1.  (Also it is a female "F" and a founder "_f").
 
 So, our generation levels for everyone can be obtained from our processed
 `pedigree`:
@@ -201,8 +202,7 @@ ped_with_gens <- pedigree %>%
   mutate(
     generation = case_when(
       !is.na(generation) ~ as.integer(generation),
-      (Pa == "0" | Ma == "0") & as.integer(Kid) < 1000 ~ 0L,
-      as.integer(Kid) > 1000 ~ as.integer(str_sub(Kid, 1, 1)) - 2L,
+      (Pa == "0" | Ma == "0") ~ as.integer(str_match(Kid, "[MF]_([0-9]+)_")[,2]) - 1L,
       TRUE ~ NA_integer_
     )
   )
@@ -227,6 +227,46 @@ genos012 <- err_genos %>%
 
 # look at them
 genos012[1:8, 1:7]
+```
+
+Let's confirm that the IDs of the individuals did not get messed up.
+First, make sure that there is a one to one correspondence with the names in
+the original pedigree:
+```{r}
+# get all the IDs found in the original pedigree
+orig_IDs <- FourGen_555_pedigree %>%
+  select(Kid, Pa, Ma) %>%
+  unlist() %>%
+  unname() %>%
+  unique()
+
+# get all the IDs occurring in the genotypes
+geno_IDs <- genos012$indiv
+
+# see if any are duplicates:
+length(geno_IDs) == length(unique(geno_IDs))
+
+# no duplicates.
+
+setdiff(geno_IDs, orig_IDs)
+```
+
+OK. MENDEL has an 8 character limit on the IDs of individuals.  The rest
+get truncated.  The correct way to deal with that would be to rename the
+individuals and send them to Mendel, but I won't hassle with that for now.
+
+Instead, for this case, it is sufficient to just add an `f` on the end of any
+IDs that end with an underscore.
+
+```{r}
+genos012_fixed <- genos012 %>%
+  mutate(indiv = case_when(
+    str_detect(indiv, "_$") ~ str_c(indiv, "f"),
+    TRUE ~ indiv
+  ))
+
+# now check:
+setequal(genos012_fixed$indiv, orig_IDs)
 ```
 
 From that, you can easily select the individuals that are to be
