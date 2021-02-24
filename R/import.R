@@ -12,10 +12,12 @@ NULL
 
 
 #### Import functions from packages ####
-#' @importFrom dplyr bind_rows case_when desc mutate n n_distinct rename
+#' @importFrom dplyr arrange bind_rows case_when desc filter group_by mutate n n_distinct rename select ungroup
+#' @importFrom purrr map map2
 #' @importFrom stats quantile rmultinom runif sd setNames
+#' @importFrom stringr str_sub
 #' @importFrom tibble tibble
-#' @importFrom tidyr separate
+#' @importFrom tidyr separate unnest
 #' @importFrom utils read.table write.table
 
 
@@ -56,15 +58,28 @@ if(getRversion() >= "2.15.1")  {
       "alleidx",
       "chrom",
       "ender",
+      "full_cc",
+      "init_cc",
       "list_name",
       "loc_name",
       "locidx",
+      "ma",
+      "ma_cc",
       "newfreq",
       "num_bases",
       "num_markers",
+      "num_offs",
+      "offspring",
+      "pa",
+      "pa_cc",
       "pedname",
+      "pmap",
       "pos",
-      "scaled_length"
+      "prefix",
+      "scaled_length",
+      "sex",
+      "sex_list",
+      "sibs"
     )
   )
 }

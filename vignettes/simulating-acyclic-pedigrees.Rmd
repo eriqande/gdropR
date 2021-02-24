@@ -1,0 +1,130 @@
+---
+title: "Simulating acyclic pedigrees"
+author: "Eric C. Anderson"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Simulating acyclic pedigrees}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+So, my original approach to doing this was a fail because it actually produced
+a whole lot of intergenerational marriage chains!  It is not enough to
+just make sure that two mates don't share ancestors---they both must also
+belong to different connected components.
+
+I have a function in this package called `simulate_acyclic_pedigree()` that tries to
+do that there.  I am still testing it.  
+
+Here is what it looks like:
+```{r}
+library(tidyverse)
+library(gdropR)
+set.seed(555)
+test <- simulate_acyclic_pedigree(Nm = 10, Nf = 10, end_time = 2)
+```
+
+
+That takes a long while (like, over a minute, with Nf = Nm = 40, and end_time = 5).
+It is no doubt all the iteration being done to find full connected
+components.
+
+We will save that pedigree as FourGen_555_pedigree.rda.
+
+If you want to visualize it you can do so like this (not evaluated by default):
+```{r, eval=FALSE}
+library(pedvis)
+
+all_names <- unique(unlist(test$pedigree))
+
+out3 <- ped2dot(
+test$pedigree,
+pfactorNodeStyle = "invis",
+pfactorEdgeStyle = "invis",
+ShowLabelNodes = all_names,
+outf = "ped2dot_ex3"
+)
+
+
+```
+
+
+That is not very pretty.
+
+We should be able to test if it is acyclic by testing whether it is
+a tree.  Theorem: an undirected graph is a tree if it is connected and
+has N vertices and N-1 edges.
+
+
+
+So, let's make a node list and an edgelist that we can read into iGraph.
+```{r}
+library(igraph)
+# first translate it into a from->to data frame to read into
+# igraph.  We will make it a factor graph, or course
+tmp <- test$pedigree %>%
+  mutate(factor_node = paste0(Pa, "-%-", Ma))
+
+pa_down <- tmp %>% 
+  group_by(Pa, factor_node) %>%
+  slice(1) %>%
+  select(Pa, factor_node) %>%
+  rename(from = Pa, to = factor_node) %>%
+  ungroup()
+
+ma_down <- tmp %>% 
+  group_by(Ma, factor_node) %>%
+  slice(1) %>%
+  select(Ma, factor_node) %>%
+  rename(from = Ma, to = factor_node) %>%
+  ungroup()
+  
+node_down <- tmp %>% 
+  group_by(factor_node, Kid) %>%
+  slice(1) %>%
+  select(factor_node, Kid) %>%
+  rename(from = factor_node, to = Kid) %>%
+  ungroup()
+
+graph_df <- bind_rows(
+  pa_down,
+  ma_down,
+  node_down
+)
+
+g <- graph_from_data_frame(
+  graph_df, 
+  directed = FALSE
+)
+
+CC <- components(g)
+
+# get a list of the vertices in each component
+vert_list <- split(names(CC$membership), CC$membership)
+
+# pull each of those components out as a separate graph
+v_and_e_counts <- lapply(
+  vert_list, 
+  function(v) {
+    g2 <- induced_subgraph(g, v)
+    tibble(
+      num_vertices = vcount(g2),
+      num_edges = gsize(g2)
+    )
+  }
+) %>%
+  bind_rows() %>%
+  mutate(diff = num_vertices - num_edges)
+
+if(all(v_and_e_counts$diff == 1)) {
+  print("Yep! It's a Tree!")
+}
+```

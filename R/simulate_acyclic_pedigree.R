@@ -30,6 +30,7 @@
 #' This also initializes their connected components, etc.
 #' And, it returns them in a list, like what we shall use for
 #' going forward...
+#' @keywords internal
 create_founders <- function(Nm = 50, Nf = Nm) {
   male_ids <- paste0("M_1_", 1:Nm, "_f")
   female_ids <- paste0("F_1_", 1:Nm, "_f")
@@ -50,6 +51,48 @@ create_founders <- function(Nm = 50, Nf = Nm) {
 
 
 
+#' update the conn-comps of two mates and all the rest.
+#' This assumes that the current connected components are in two
+#' named lists, Mal and Fem.  It updates each, and then smushes
+#' them into a single list and iteratively updates the remaining
+#' ones, and then returns the updated Mal and Fem in a list.
+#' mn and fn are the names of the male and female that are paired up.
+#' @keywords internal
+update_conn_comps_after_pair_union <- function(Mal, Fem, mn, fn) {
+  # first off, if Mal doesn't include mn, or Fem does not include fn
+  # then those must be new founders, and we need to add them in here.
+  if(!(mn %in% names(Mal))) {
+    Mal[[mn]] <- mn
+  }
+  if(!(fn %in% names(Fem))) {
+    Fem[[fn]] <- fn
+  }
+
+  # now, update the conn comps of these two to be the union of their
+  # respective connected components
+  uni <- union(Mal[[mn]], Fem[[fn]])
+  Mal[[mn]] <- uni
+  Fem[[fn]] <- uni
+
+  # now, put those into a single list and keep track of where
+  # break is
+  nMal <- length(Mal)
+  nFem <- length(Fem)
+
+  allThem <- c(Mal, Fem)
+
+  allThem2 <- iteratively_expand_conn_comps(P = NULL, CC = allThem)
+
+  Mal <- allThem2[1:nMal]
+  Fem <- allThem2[(nMal + 1):(nMal + nFem)]
+
+  # return those in a list
+  list(
+    males = Mal,
+    females = Fem
+  )
+}
+
 
 #' Determine pairs.  Given the individuals in a given year
 #' determine the pairs that will be formed, add in founders
@@ -57,6 +100,7 @@ create_founders <- function(Nm = 50, Nf = Nm) {
 #' @param L a list with elements "males" and "females" which are named
 #' lists of connected components.
 #' @param t the year that the pairs that are being formed were born.
+#' @keywords internal
 make_pairs <- function(L, t) {
   # get the names of the males and females. Then randomly order the male names to start
   # going through them and assigning pairs.
@@ -107,6 +151,13 @@ make_pairs <- function(L, t) {
     # and mark that female as having been used
     usedFem[idx] <- newf
 
+    # and, finally, we need to update the connected components of each of
+    # these mates, (and then iteratively all the rest)
+    tmp <- update_conn_comps_after_pair_union(Mal, Fem, mn = i, fn = newf)
+    Mal <- tmp$males
+    Fem <- tmp$females
+
+    print(paste0("Found pair for male ", idx, " of ", length(m), " at time ", t))
 
   }
 
@@ -127,15 +178,26 @@ make_pairs <- function(L, t) {
       idx <- idx + 1
       mp[idx] <- newm
       fp[idx] <- i
+
+      # and once again expand the conn-comps with each
+      tmp <- update_conn_comps_after_pair_union(Mal, Fem, mn = newm, fn = i)
+      Mal <- tmp$males
+      Fem <- tmp$females
+
+      print(paste0("Found pair for leftover female ", idx, " of ", length(leftover_females), " at time ", t))
     }
   }
 
-  # Finally make a tibble of the pairs that we managed to make:
+  # Finally make a tibble of the pairs that we managed to make, and
+  # add the pa and ma conn comps on there too!
   pTib <- tibble::tibble(
     pa = mp,
     ma = fp
   ) %>%
     dplyr::filter(!is.na(ma) & !is.na(pa))
+
+  pTib$pa_cc <- Mal[pTib$pa]
+  pTib$ma_cc <- Fem[pTib$ma]
 
   pTib
 }
@@ -148,6 +210,7 @@ make_pairs <- function(L, t) {
 #' For now, I am setting it to that multinom + 1, but that can
 #' easily change in the future.
 #' @param P the tibble that comes out of make_pairs
+#' @keywords internal
 num_offspring <- function(P) {
   P %>%
     dplyr::mutate(num_offs = 1 + rmultinom(1, size = dplyr::n(), prob = rep(1/dplyr::n(), length.out = dplyr::n()))[,1])
@@ -160,6 +223,7 @@ num_offspring <- function(P) {
 #' with sex given randomly at 50/50
 #' @param P the tibble that comes out of num_offspring
 #' @param t the year that the newborns are being born
+#' @keywords internal
 expand_offspring <- function(P, t) {
   ret <- P %>%
     mutate(
@@ -192,11 +256,11 @@ expand_offspring <- function(P, t) {
 #' all of their siblings.
 #' @param P a tibble like what comes out of expand_offspring
 #' @param I the Indivs list component for the parent (t-1) generation
-set_init_cc_members <- function(P, I) {
-  P$pa_cc <- I$males[P$pa]
-  P$ma_cc <- I$females[P$ma]
+#' @keywords internal
+set_init_cc_members <- function(P) {
 
-  # for the new founders, set their connected components to just themselves
+  # for the new founders, in case I somehow did not catch them,
+  # set their connected components to just themselves
   Pa_new_founders <- sapply(P$pa_cc, is.null)
   P$pa_cc[Pa_new_founders] <- as.list(P$pa[Pa_new_founders])
 
@@ -222,9 +286,21 @@ set_init_cc_members <- function(P, I) {
 #' function that iteratively expands the connected component members
 #' of each individual, until they reflect all the individuals they
 #' are connected to.
-#' @param P a tibble like that which comes out of expand_offspring
-iteratively_expand_conn_comps <- function(P) {
-  cc <- P$init_cc
+#' @param P a tibble like that which comes out of expand_offspring, or
+#' NULL if you just want to operate on the named list of conn comps.
+#' @keywords internal
+iteratively_expand_conn_comps <- function(P, CC = NULL) {
+  if(!is.null(P)) {
+    cc <- P$init_cc
+    if(!is.null(CC)) {
+      stop("You can't have both P and CC NULL")
+    }
+  } else {
+    if(is.null(CC)) {
+      stop("One of P or CC must be non-null")
+    }
+    cc <- CC
+  }
 
   do_it <- 1
   while (do_it == 1) {
@@ -243,6 +319,10 @@ iteratively_expand_conn_comps <- function(P) {
     if(identical(cc, old_cc)) {
       do_it <- 0
     }
+  }
+
+  if(!is.null(CC)) {
+    return(cc)
   }
 
   P$full_cc <- cc
@@ -264,6 +344,7 @@ iteratively_expand_conn_comps <- function(P) {
 #' this function takes the tibble coming out of
 #' iteratively _expand_conn_comps, and it turn it
 #' into a list item that can be returned into Indiv[[t]].
+#' @keywords internal
 translate_tib_to_list_element <- function(Pairs) {
   # now, store the males and females with their connected component members
   # back into Indivs
@@ -286,7 +367,15 @@ translate_tib_to_list_element <- function(Pairs) {
 }
 
 
-#' this is how it all comes together
+#' Simulate an acyclic pedigree
+#'
+#' This keeps track of the connected members of all the individual
+#' and forbids mating between members of the same connected component.
+#' @param Nm number of male founders.
+#' @param Nf number of female founders.
+#' @param end_time the generation level of the last set of offspring to simulate.
+#' The initial founders are in generation 1.
+#' @export
 simulate_acyclic_pedigree <- function(Nm = 10, Nf = 10, end_time = 4) {
 
   stopifnot(end_time >= 2)
@@ -297,7 +386,7 @@ simulate_acyclic_pedigree <- function(Nm = 10, Nf = 10, end_time = 4) {
     Pairs <- make_pairs(Indivs[[t-1]], t-1) %>%
       num_offspring() %>%
       expand_offspring(t = t) %>%
-      set_init_cc_members(I = Indivs[[t - 1]]) %>%
+      set_init_cc_members() %>%
       iteratively_expand_conn_comps()
 
     Indivs[[t]] <- translate_tib_to_list_element(Pairs)

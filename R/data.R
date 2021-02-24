@@ -11,10 +11,10 @@
 "long_markers"
 
 
-#' A five generation pedigree simulated to be acyclic
+#' A four generation pedigree simulated to be acyclic
 #'
-#' Eric Anderson simulated this.
-"ped5gen_acyclic"
+#' Eric Anderson simulated this using code in one of the vignettes.
+"FourGen_555_pedigree"
 
 
 #' A list of some very small pedigrees used in CKMRsim

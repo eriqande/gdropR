@@ -115,7 +115,7 @@ We set the `fem_prob` parameter to make all those final generation individuals
 females.  (We will be pretending that we can only sample females from
 this population.)
 ```{r}
-pedigree <- ped5gen_acyclic %>%
+pedigree <- FourGen_555_pedigree %>%
   add_explicit_founder_parents() %>%
   add_pedigree_sex_column(fem_prob = 1.0)
 ```
@@ -185,7 +185,7 @@ most of the individuals, but not the additional founders we had to put in there.
 
 Look at the pedigree:
 ```{r}
-head(ped5gen_acyclic)
+head(FourGen_555_pedigree)
 ```
 The "generation" column there effectively gives the generation at which
 each of the Kids was born.  
